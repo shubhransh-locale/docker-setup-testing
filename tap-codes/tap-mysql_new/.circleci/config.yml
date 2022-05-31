@@ -1,0 +1,60 @@
+version: 2.1
+orbs:
+  slack: circleci/slack@3.4.2
+
+jobs:
+  build:
+    docker:
+      - image: 218546966473.dkr.ecr.us-east-1.amazonaws.com/circle-ci:stitch-tap-tester
+      - image: singerio/mysql:5.7.29-binlog
+        environment:
+          MYSQL_ROOT_PASSWORD: Password1!
+          MYSQL_DATABASE: dev
+    steps:
+      - checkout
+      - run:
+          name: 'Get environment variables'
+          command: |
+            aws s3 cp s3://com-stitchdata-dev-deployment-assets/environments/tap-tester/tap_tester_sandbox dev_env.sh
+      - run:
+          name: 'Setup virtual env'
+          command: |
+            virtualenv -p python3 /usr/local/share/virtualenvs/tap-mysql
+            source dev_env.sh
+            source /usr/local/share/virtualenvs/tap-mysql/bin/activate
+            pip install .[dev]
+            pylint tap_mysql -d C,W,unexpected-keyword-arg,duplicate-code
+      - run:
+          name: 'Unit Tests'
+          command: |
+            source /usr/local/share/virtualenvs/tap-mysql/bin/activate
+            pip install nose
+            source dev_env.sh
+            nosetests tests/nosetests
+      - run:
+          name: 'Integration Tests'
+          command: |
+            source /usr/local/share/virtualenvs/tap-tester/bin/activate
+            source dev_env.sh
+            pip install .
+            run-test --tap=tap-mysql tests
+      - slack/notify-on-failure:
+          only_for_branches: master
+
+workflows:
+  version: 2
+  commit: &commit_jobs
+    jobs:
+      - build:
+          context:
+            - circleci-user
+            - tier-1-tap-user
+  build_daily:
+    <<: *commit_jobs
+    triggers:
+      - schedule:
+          cron: "0 1 * * *"
+          filters:
+            branches:
+              only:
+                - master
